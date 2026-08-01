@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Credenciais de Cloud
+*.json
+!*.example.json
+
+# Arquivos locais
+*.parquet
+*.csv
+
+# Logs do projeto
+logs/*.log
+
+# Dados gerados pelo pipeline
+data/**/*.parquet
+data/**/*.csv
