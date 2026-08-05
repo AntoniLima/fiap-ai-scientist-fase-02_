@@ -4,8 +4,14 @@
 
 google-cloud-bigquery==3.42.3
 google-cloud-bigquery-storage==2.39.0
+
 pandas==3.0.5
 pyarrow==25.0.0
+
 boto3==1.43.60
+
 python-dotenv==1.2.2
 db-dtypes==1.4.3
+
+# Dependências futuras (Silver/Gold)
+# pydantic-settings

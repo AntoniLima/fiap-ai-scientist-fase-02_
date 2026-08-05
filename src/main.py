@@ -1,5 +1,6 @@
 from ingestion.extract import extract_table
 from ingestion.writer import save_parquet
+from cloud.s3 import upload_file
 
 
 TABLES = [
@@ -11,7 +12,6 @@ TABLES = [
     "meta_alfabetizacao_municipio",
     "dicionario",
 ]
-
 
 def main():
 
@@ -25,7 +25,9 @@ def main():
 
         df = extract_table(table)
 
-        save_parquet(df, table)
+        file_path = save_parquet(df, table)
+
+        upload_file(file_path)
 
     print("=" * 60)
     print("PROCESSO FINALIZADO")
