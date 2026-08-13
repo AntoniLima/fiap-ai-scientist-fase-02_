@@ -14,7 +14,6 @@ def extract_table(table_name: str):
     sql = f"""
     SELECT *
     FROM `basedosdados.br_inep_avaliacao_alfabetizacao.{table_name}`
-    LIMIT 10000
     """
 
     print(f"Extraindo tabela: {table_name}")
