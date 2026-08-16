@@ -8,10 +8,12 @@ Pipeline de dados híbrida (batch + streaming) em nuvem, construída sobre Arqui
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Cloud](https://img.shields.io/badge/cloud-AWS-orange)
 ![Fonte](https://img.shields.io/badge/fonte-BigQuery-4285F4)
+![IaC](https://img.shields.io/badge/IaC-Terraform-7B42BC)
+![Qualidade](https://img.shields.io/badge/qualidade-8%2F8%20aprovadas-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 > **Legenda de status:** ✅ concluído · 🚧 em andamento · ⏳ planejado
-> **Documentação aprofundada:** este README conta a história completa do projeto. Os detalhes técnicos de cada área estão em [`/docs`](docs/) — veja o [índice da documentação](docs/README.md).
+> **Documentação:** este README apresenta para o projeto: problema, arquitetura, decisões, execução e evidências.
 
 ---
 
@@ -21,21 +23,24 @@ Pipeline de dados híbrida (batch + streaming) em nuvem, construída sobre Arqui
 2. [A solução em uma página](#2-a-solução-em-uma-página)
 3. [Fonte de dados](#3-fonte-de-dados)
 4. [Arquitetura](#4-arquitetura)
-5. [Decisões arquiteturais e trade-offs](#5-decisões-arquiteturais-e-trade-offs)
-6. [As camadas do data lake](#6-as-camadas-do-data-lake)
-7. [Qualidade de dados](#7-qualidade-de-dados)
-8. [Ingestão em streaming](#8-ingestão-em-streaming)
-9. [Observabilidade e monitoramento](#9-observabilidade-e-monitoramento)
-10. [FinOps — custo e otimização](#10-finops--custo-e-otimização)
-11. [Aplicação em IA e políticas públicas](#11-aplicação-em-ia-e-políticas-públicas)
-12. [Como executar](#12-como-executar)
-13. [Evidências de execução](#13-evidências-de-execução)
-14. [Estrutura do repositório](#14-estrutura-do-repositório)
-15. [Fluxo de trabalho Git](#15-fluxo-de-trabalho-git)
-16. [Roadmap e status](#16-roadmap-e-status)
-17. [Documentação complementar](#17-documentação-complementar)
-18. [Equipe](#18-equipe)
-19. [Licença](#19-licença)
+5. [Infraestrutura como código](#5-infraestrutura-como-código)
+6. [Decisões arquiteturais e trade-offs](#6-decisões-arquiteturais-e-trade-offs)
+7. [As camadas do data lake](#7-as-camadas-do-data-lake)
+8. [Contrato da camada Silver](#8-contrato-da-camada-silver)
+9. [Qualidade de dados](#9-qualidade-de-dados)
+10. [Orquestração](#10-orquestração)
+11. [Ingestão em streaming](#11-ingestão-em-streaming)
+12. [Observabilidade e monitoramento](#12-observabilidade-e-monitoramento)
+13. [Análise exploratória](#13-análise-exploratória)
+14. [FinOps — custo e otimização](#14-finops--custo-e-otimização)
+15. [Aplicação em IA e políticas públicas](#15-aplicação-em-ia-e-políticas-públicas)
+16. [Como executar](#16-como-executar)
+17. [Evidências de execução](#17-evidências-de-execução)
+18. [Estrutura do repositório](#18-estrutura-do-repositório)
+19. [Fluxo de trabalho Git](#19-fluxo-de-trabalho-git)
+20. [Roadmap e status](#20-roadmap-e-status)
+21. [Equipe](#21-equipe)
+22. [Licença](#22-licença)
 
 ---
 
@@ -85,9 +90,7 @@ O INEP é o **produtor** do dado; a Base dos Dados é o **meio de acesso** — e
 
 **O código IBGE de município (7 dígitos) é a espinha dorsal da integração.** Todas as entidades territoriais convergem nele, e por isso ele é tratado como *string* em toda a pipeline — preservar zeros à esquerda e a semântica de código, não de número, é pré-requisito para o join funcionar. A regra precisa valer para todas as chaves, sem exceção silenciosa.
 
-**Por que uma fonte única e não várias.** Chegamos a explorar os microdados brutos do INEP em CSV e as planilhas oficiais de metas em XLSX. Descartamos esse caminho: ele agrega variabilidade de formato — duas linhas de cabeçalho, nulos codificados como texto, safras com precisão divergente — sem agregar informação que a Base dos Dados já não entregue tratada. Trocamos superfície de erro por consistência. A decisão e as alternativas descartadas estão em **[ADR-001](docs/arquitetura/adr-001-fonte-de-dados.md)**.
-
-📄 *Aprofundamento:* [esquema completo das tabelas e mapa de chaves](docs/qualidade/) ⏳
+**Por que uma fonte única e não várias.** Chegamos a explorar os microdados brutos do INEP em CSV e as planilhas oficiais de metas em XLSX. Descartamos esse caminho: ele agrega variabilidade de formato — duas linhas de cabeçalho, nulos codificados como texto, safras com precisão divergente — sem agregar informação que a Base dos Dados já não entregue tratada. Trocamos superfície de erro por consistência — ver ADR-001 abaixo.
 
 ---
 
@@ -156,13 +159,35 @@ flowchart LR
 | Dashboard | ⏳ *a definir* | Visualização analítica | ⏳ |
 | Padronização | `ruff` · `black` · `pytest` · `pre-commit` | Qualidade de código | ⏳ |
 
-📄 *Aprofundamento:* [diagrama detalhado, modelo dimensional e fluxo de dados](docs/arquitetura/) ⏳
+---
+
+## 5. Infraestrutura como código
+
+Toda a infraestrutura AWS é declarada em Terraform, em `infra/terraform/`. Um `terraform apply` cria **19 recursos** do zero.
+
+| Recurso | Qtde | Papel |
+|---|---:|---|
+| `aws_glue_catalog_database` | 3 | Um por camada do medalhão |
+| `aws_glue_crawler` | 1 | Cataloga a Bronze — 7 include paths explícitos |
+| `aws_glue_catalog_table` | 7 | Tabelas da Silver, com schema declarado |
+| `aws_glue_job` | 2 | Transformação e qualidade — Glue 4.0, 2× G.1X |
+| `aws_s3_object` | 2 | Upload dos scripts PySpark |
+| `aws_glue_workflow` | 1 | Orquestração |
+| `aws_glue_trigger` | 3 | Encadeamento condicional |
+
+**Crawler na Bronze, schema explícito na Silver.** Na Bronze o schema é da fonte, e descobri-lo automaticamente é apropriado. Na Silver o schema é produto de decisão: `atingiu_meta` é boolean porque "sem meta" não é "não atingiu"; `id_municipio` é string porque código IBGE não é número. Deixar um Crawler inferir isso terceirizaria a decisão para um palpite sobre os dados de uma execução.
+
+Declarar as tabelas em Terraform tem vantagem sobre `CREATE TABLE IF NOT EXISTS`: se o schema do Job mudar, o `terraform plan` acusa a divergência. O DDL veria que a tabela existe e não faria nada, deixando o Catalog descrevendo uma coisa e o Parquet contendo outra.
+
+**Tags em todos os recursos que as suportam** — `Environment`, `Layer`, `ManagedBy`, `Pipeline`, `Project`. Permitem rastrear consumo por camada e sinalizam gestão por IaC: alteração manual pelo console vira divergência que o próximo `apply` desfaz.
+
+**Restrição do ambiente.** O AWS Academy Learner Lab não permite criar roles IAM. O projeto usa a `LabRole` já provisionada, e as credenciais expiram a cada sessão do laboratório.
 
 ---
 
-## 5. Decisões arquiteturais e trade-offs
+## 6. Decisões arquiteturais e trade-offs
 
-Cada decisão relevante é registrada como ADR (*Architecture Decision Record*) em [`docs/arquitetura/`](docs/arquitetura/), no formato contexto → decisão → alternativas → trade-off. O resumo está aqui; a análise completa, no documento correspondente.
+Cada decisão relevante é registrada como ADR (*Architecture Decision Record*), no formato decisão → trade-off.
 
 ### ADR-001 · Base dos Dados via BigQuery como fonte única
 
@@ -170,7 +195,6 @@ Consumimos as tabelas do dataset público no BigQuery, em vez de baixar microdad
 
 **Trade-off.** A Base dos Dados adiciona um intermediário entre nós e o dado oficial — se ela atrasar uma atualização, atrasamos junto. Em troca, recebemos tipagem consistente, esquema estável entre edições e acesso por SQL. O caminho direto ao INEP daria independência, ao custo de absorver toda a variabilidade de formato das planilhas. Para um projeto cuja complexidade real está na *integração* e não na *aquisição*, investir esforço em parsing de XLSX seria otimizar o lugar errado.
 
-📄 [Leia a ADR-001 completa](docs/arquitetura/adr-001-fonte-de-dados.md)
 
 ### ADR-002 · BigQuery como fonte, AWS como plataforma
 
@@ -178,7 +202,6 @@ O GCP entra exclusivamente como ponto de extração. Todo o armazenamento e proc
 
 **Trade-off.** Manter tudo no GCP eliminaria uma nuvem da equação e simplificaria a gestão de credenciais. Optamos pelo S3 porque o data lake é o centro da arquitetura pedida, e porque a situação "a fonte mora no ecossistema X, o processamento no Y" é corriqueira em ambientes reais — resolvê-la é parte do exercício, não um desvio dele. O custo é gerenciar dois conjuntos de credenciais.
 
-📄 [Leia a ADR-002 completa](docs/arquitetura/) ⏳
 
 ### ADR-003 · Parquet já na camada Bronze
 
@@ -186,7 +209,6 @@ A ingestão grava Parquet diretamente, sem CSV intermediário.
 
 **Trade-off.** A definição canônica de Bronze é "dado bruto, sem transformação significativa", e converter o formato tecnicamente tensiona isso. Aceitamos porque a conversão é *lossless* — nenhum valor se altera, apenas a serialização — e o ganho em custo de armazenamento e velocidade de leitura é imediato. O que não seria aceitável é a conversão acontecer sem estar documentada.
 
-📄 [Leia a ADR-003 completa](docs/arquitetura/) ⏳
 
 ### ADR-004 · Serverless em vez de cluster gerenciado
 
@@ -194,7 +216,6 @@ S3 + Athena + execução sob demanda, sem cluster Spark permanente.
 
 **Trade-off.** Um EMR ou Glue escalaria melhor para volumes ordens de grandeza maiores, mas cobra por cluster ativo mesmo ocioso. O volume aqui é grande para planilha e pequeno para Big Data — dimensionar a arquitetura ao problema real, e não à moda arquitetural, mantém a conta próxima de zero e o tempo de execução em minutos. O limite é conhecido: se o escopo crescesse dez vezes, a decisão precisaria ser revisitada.
 
-📄 [Leia a ADR-004 completa](docs/arquitetura/) ⏳
 
 ### ADR-005 · Códigos territoriais como *string*
 
@@ -202,11 +223,9 @@ S3 + Athena + execução sob demanda, sem cluster Spark permanente.
 
 **Trade-off.** Ocupa mais espaço que inteiro e exige atenção nos joins. Em troca, elimina uma classe inteira de falha silenciosa: código que perde zero à esquerda não lança erro, apenas deixa de casar no join — e o município desaparece do resultado sem nenhum aviso.
 
-📄 [Leia a ADR-005 completa](docs/arquitetura/) ⏳
-
 ---
 
-## 6. As camadas do data lake
+## 7. As camadas do data lake
 
 ### 🥉 Bronze — fidelidade à origem
 
@@ -216,16 +235,35 @@ Recebe as tabelas como vieram da consulta, sem interpretação, uma pasta por en
 
 ### 🥈 Silver — limpa, padronizada e integrada
 
-É onde mora a complexidade real do projeto:
+Executada como **AWS Glue Job (PySpark)**, com schema declarado explicitamente. Lê a Bronze pelo Glue Catalog e grava sete tabelas no S3.
 
-- **Normalização de chaves territoriais** — o join que sustenta todo o resto.
-- **Tipagem correta**, com códigos como string (ADR-005).
-- **Tratamento de nulos e ausências**, distinguindo "não informado" de "zero".
-- **Conciliação entre representações** da mesma rede de ensino nas diferentes tabelas.
-- **Integração das entidades** em um modelo dimensional de fatos e dimensões.
-- **Deduplicação** e aplicação das regras de qualidade.
+**As três transformações que sustentam a camada:**
 
-📄 *Aprofundamento:* [modelo dimensional e mapeamento coluna a coluna](docs/arquitetura/) ⏳
+**Tradução da rede de ensino.** Os resultados usam código (`0`, `2`, `3`, `5`); as metas usam texto (`Municipal`, `Pública`). Sem a ponte fornecida pela tabela `dicionario` da própria fonte, o join meta × resultado não acontece. Com ela, a correspondência é 1:1.
+
+**Unpivot das metas.** Cada linha da origem traz sete colunas `meta_alfabetizacao_2024` a `2030`, e o campo `ano` é a safra de publicação, não o ano-alvo. São 75.516 linhas após a transposição, reduzidas a 37.660 pela regra de precedência entre safras.
+
+**Classificação das situações de integração.** Nem toda ausência de meta é falha, e o resultado registra qual é qual.
+
+| Saída | Grão | Linhas |
+|---|---|---:|
+| `dim_territorio` | Município | 5.550 |
+| `dim_rede` | Código de rede | 7 |
+| `fato_indicador_municipio` | Município × ano × rede | 23.995 |
+| `fato_indicador_uf` | UF × ano × rede | 145 |
+| `fato_aluno` | Aluno × ano | 3.867.999 |
+| `fato_meta` | Ente × ano-alvo | 37.660 |
+| `meta_vs_resultado` | Município × ano, rede Municipal | 10.896 |
+| `quarentena` | Registros anômalos com motivo | 216 |
+
+**Composição da integração:**
+
+| Situação | Linhas | Significado |
+|---|---:|---|
+| `ano_base` | 5.448 | 2023 não tem meta por definição |
+| `comparavel` | 5.232 | Resultado e meta disponíveis |
+| `meta_nao_publicada` | 120 | Município na tabela, meta do ano nula |
+| `municipio_sem_meta` | 96 | Município ausente da tabela de metas |
 
 ### 🥇 Gold — pronta para consumo
 
@@ -240,30 +278,76 @@ Datasets desnormalizados, agregados no grão de análise:
 
 ---
 
-## 7. Qualidade de dados
+## 8. Contrato da camada Silver
 
-Qualidade é entregável de primeira classe, não verificação final. Cada regra corresponde a um risco concreto identificado nas tabelas — nenhuma é checagem genérica de manual.
+Colunas que quem consome a camada precisa conhecer:
 
-| # | Regra | Ação quando falha |
+| Coluna | Tipo | Observação |
 |---|---|---|
-| Q1 | Integridade referencial de `id_municipio` entre indicador, metas e dimensão territorial | Bloqueia promoção para Gold |
-| Q2 | Códigos territoriais como string, com 7 dígitos preservados | Falha de esquema |
-| Q3 | Unicidade da chave natural em cada tabela | Log + quarentena |
-| Q4 | Registros sem vínculo territorial identificável | **Quarentena**, nunca descarte silencioso |
-| Q5 | Coerência entre indicador de alfabetização e proficiência ≥ 743 | Teste de integridade contínuo |
-| Q6 | Cobertura por ano e UF dentro do esperado | Alerta de variação anômala |
-| Q7 | Nulos distinguidos de zeros em campos numéricos | Correção documentada |
-| Q8 | Volume de registros por camada dentro da faixa histórica | Alerta de perda silenciosa |
+| `id_municipio` | string | Código IBGE de 7 dígitos. Nunca numérico |
+| `rede_codigo` / `rede_nome` | string | `3` = Municipal, `5` = Pública |
+| `situacao_meta` | string | `comparavel`, `ano_base`, `meta_nao_publicada`, `municipio_sem_meta` |
+| `atingiu_meta` | boolean **nullable** | `<NA>` onde não há meta — não `False` |
+| `tem_distribuicao_nivel` | boolean | A distribuição por nível só existe em 2024 |
+| `aluno_valido` | boolean | Filtro obrigatório antes de agregar `fato_aluno` |
+| `faixa_proximidade` | string | Distância até o corte de 743, em faixas de 50 pontos |
+| `safra` × `ano_meta` | int | Safra é o ano de publicação; `ano_meta` é o alvo |
 
-**Princípio de quarentena.** Registro reprovado não some — vai para área isolada com o motivo da reprovação registrado. Descarte silencioso corrompe indicadores sem deixar rastro, e em dado educacional isso significa um município simplesmente desaparecendo da análise. O gestor daquele município nunca saberia que foi excluído.
+**Dois cuidados que produzem número errado sem gerar erro:**
 
-Cada execução gera relatório versionado em `quality/reports/`, permitindo comparar a qualidade ao longo do tempo — porque a fonte muda, e a pipeline precisa perceber quando isso acontece.
+A coluna `alfabetizado` marca como `0` os 512.153 alunos ausentes da avaliação. Agregar `fato_aluno` sem filtrar `aluno_valido` e ponderar por `peso_aluno` trata ausência como reprovação e diverge do número oficial.
 
-📄 *Aprofundamento:* [catálogo completo de regras, implementação e relatórios](docs/qualidade/) ⏳
+`atingiu_meta` é boolean nullable. Agregar sem tratar o nulo classifica 216 municípios como "não atingiram a meta" — afirmação falsa sobre 216 entes.
 
 ---
 
-## 8. Ingestão em streaming
+## 9. Qualidade de dados
+
+Oito regras executadas como **Glue Job em Spark SQL** sobre o Catalog, dentro do Workflow. Regra bloqueante reprovada faz o Job falhar e interrompe o fluxo — o portão entre Silver e Gold é comportamento da AWS, não disciplina de quem executa.
+
+**Última execução: 8 de 8 aprovadas, 0 bloqueios.**
+
+| # | Regra | Severidade | Resultado |
+|---|---|---|---|
+| Q1 | Integridade referencial de `id_municipio` | bloqueante | 0 órfãos |
+| Q2 | Identificadores como texto de 7 dígitos | bloqueante | conforme |
+| Q3 | Unicidade da chave natural | bloqueante | 0 duplicatas |
+| Q4 | Vínculo territorial derivado do código IBGE | bloqueante | 0 sem vínculo |
+| Q5 | Coerência com o ponto de corte 743 | bloqueante | **0 divergências em 3.354.661 registros** |
+| Q6 | Cobertura temporal e territorial | alerta | 5.550 municípios, 2 anos |
+| Q7 | Nulos estruturais na distribuição por nível | alerta | 0 fora do padrão |
+| Q8 | Conservação de volume entre camadas | bloqueante | bronze 23.995 = silver 23.995 |
+
+**Q5 não é premissa da documentação, é fato medido.** A regra do ponto de corte foi verificada contra 3,3 milhões de registros individuais.
+
+**Q7 detecta mudança, não erro.** Ela pergunta se o nulo está onde a premissa diz que deveria estar. Se a fonte publicar a distribuição de 2023 numa atualização futura, Q7 reprova — porque a premissa envelheceu, não porque o dado piorou.
+
+**Princípio de quarentena.** Registro anômalo não some: vai para tabela isolada com o motivo. Descarte silencioso faria um município desaparecer da análise sem que seu gestor jamais soubesse.
+
+O relatório é gerado a cada execução em `s3://<bucket>/quality/reports/`.
+
+---
+
+## 10. Orquestração
+
+A pipeline se encadeia dentro da AWS por **Glue Workflow**:
+
+```
+trigger ON_DEMAND
+  └─ crawler da Bronze
+      └─ (SUCCEEDED) job da Silver
+          └─ (SUCCEEDED) job de qualidade
+```
+
+Cada etapa só dispara se a anterior teve sucesso. O job de qualidade levanta exceção quando uma regra bloqueante reprova, o que interrompe o fluxo.
+
+**Por que Glue Workflow e não Step Functions ou MWAA.** Encadeia crawlers e jobs nativamente, não exige infraestrutura adicional e não tem custo próprio. MWAA partiria de cerca de US$ 50/mês, desproporcional a uma pipeline de três etapas.
+
+**Por que `ON_DEMAND` e não agendado.** Os dados de alfabetização são anuais. Agendamento diário dispararia execuções reprocessando o mesmo dado. Trocar para `SCHEDULED` é uma linha no Terraform, quando fizer sentido.
+
+---
+
+## 11. Ingestão em streaming
 
 Os dados de alfabetização são **anuais por natureza**: não existe fluxo real em tempo quase real. A camada de streaming simula um cenário plausível de operação contínua — atualizações incrementais chegando fora do ciclo batch: retificações do INEP, correções municipais, novas divulgações.
 
@@ -271,29 +355,48 @@ O produtor publica eventos em um tópico; o consumidor grava na Bronze em parti�
 
 **Por que isso não é enfeite acadêmico.** Retificação na fonte oficial acontece de fato — o INEP já removeu registros inconsistentes de edições passadas depois da publicação. Uma arquitetura que só sabe reprocessar o lote inteiro trata correção pontual como evento caro e raro, e na prática as pessoas param de aplicar correções. Modelar a chegada incremental desde o início é decisão de desenho.
 
-📄 *Aprofundamento:* [desenho do produtor, formato do evento e consumo](docs/arquitetura/) ⏳
+---
+
+## 12. Observabilidade e monitoramento
+
+| O que monitoramos | Como |
+|---|---|
+| Situação de cada etapa | Glue Workflow, com grafo no console |
+| Volume por camada | Contagem entrada/saída no log do Job |
+| Composição da integração | Contagem por `situacao_meta` |
+| Qualidade | Relatório versionado por execução |
+| Consumo | DPU-segundos por execução |
+| Logs | CloudWatch, em `/aws-glue/jobs/output` |
+
+**O alerta mais importante não é o de falha — é o de sucesso anômalo.** Este projeto tem evidência própria: a primeira execução da integração rodou sem erro e produziu 5.664 linhas em quarentena, quando o esperado eram cerca de 200. Nenhuma exceção foi lançada; o que denunciou foi a contagem implausível. A causa era ausência estrutural tratada como anomalia — o ano de 2023, que não tem meta por definição. Corrigido, o número caiu para 216 e reconciliou com o diagnóstico.
+
+Esse episódio virou a regra **Q8**, que é bloqueante: entrada precisa ser igual a aprovados mais quarentena.
 
 ---
 
-## 9. Observabilidade e monitoramento
+## 13. Análise exploratória
 
-| O que monitoramos | Como | Por quê |
-|---|---|---|
-| Sucesso/falha de cada etapa | Logging estruturado em JSON | Rastrear onde a pipeline quebrou |
-| Volume processado por camada | Contagem de registros entrada/saída | Detectar perda silenciosa |
-| Latência de execução | Tempo por etapa | Identificar degradação e gargalos |
-| Taxa de reprovação em qualidade | Métrica por regra | Perceber mudança na fonte |
-| Custo acumulado | Métrica FinOps | Evitar surpresa na fatura |
+A camada Silver não foi escrita a partir de suposições. O notebook [`notebooks/eda_bronze.ipynb`](notebooks/eda_bronze.ipynb) percorre as fases do **CRISP-DM** sobre a Bronze e registra dez achados, cada um com o código que o comprova. A seção final mapeia cada achado à decisão correspondente em `src/transformation/silver.py`.
 
-**O alerta mais importante não é o de falha — é o de sucesso anômalo.** Uma pipeline que roda sem erro mas processa metade dos registros da execução anterior é mais perigosa do que uma que quebra, porque entrega um dashboard com números plausíveis e errados. Ninguém investiga o que não deu erro. Por isso a contagem de registros por camada é métrica de primeira ordem, com faixa esperada e alerta próprio.
+Os achados que mais afetaram o desenho:
 
-**Otimização.** Os tempos por etapa alimentam decisões concretas de tuning: estratégia de particionamento, colunas efetivamente lidas nas consultas Athena e paralelização das extrações independentes entre si.
+| # | Achado |
+|---|---|
+| 1 | `municipio` é fato, não dimensão — o dataset não traz nome nem sigla de UF |
+| 2 | Rede codificada em código nos resultados e em texto nas metas |
+| 3 | Metas em formato largo; `ano` é a safra, não o ano-alvo |
+| 4 | A safra de 2025 revisou as metas: a de 2024 passou de 59,9 para 60,0 |
+| 5 | Distribuição por nível só publicada em 2024 |
+| 7 | Corte de 743 confirmado: 0 divergências em 3,3 milhões de registros |
+| 8 | Ausentes constam como não alfabetizados |
+| 9 | 198 municípios com resultado e sem meta; DF e RR ausentes da tabela por UF |
+| 10 | Todas as chaves naturais únicas — nenhuma deduplicação necessária |
 
-📄 *Aprofundamento:* [runbook operacional, catálogo de alertas e métricas](docs/monitoramento/) ⏳
+**A limpeza clássica quase não aparece na Silver, e isso é consequência da ADR-001.** Ao escolher a Base dos Dados em vez dos arquivos brutos do INEP, o projeto trocou trabalho de correção de formato por consistência. O esforço migrou de *consertar* para *resolver semântica* — que é onde estava a complexidade real.
 
 ---
 
-## 10. FinOps — custo e otimização
+## 14. FinOps — custo e otimização
 
 | Decisão | Efeito |
 |---|---|
@@ -319,13 +422,19 @@ O produtor publica eventos em um tópico; o consumidor grava na Bronze em parti�
 
 **Atenção ao BigQuery:** a cobrança é por volume escaneado na consulta, não por linha retornada. Um `SELECT *` sem filtro varre a tabela inteira mesmo com `LIMIT` — o limite corta o retorno, não a varredura. Selecionar apenas as colunas necessárias é a otimização de maior impacto na etapa de extração.
 
-📄 *Aprofundamento:* [memória de cálculo, premissas e simulação de cenários](docs/finops/) ⏳
-
 ---
 
-## 11. Aplicação em IA e políticas públicas
+## 15. Aplicação em IA e políticas públicas
 
 A camada Gold não é o fim da pipeline — é o insumo da próxima etapa. Foi desenhada desde o início pensando em consumo por modelos.
+
+### O que os dados já mostram
+
+> **53,3% dos municípios atingiram a meta de 2024 na rede municipal** — 2.788 de 5.232 municípios com meta publicada.
+
+Quase metade da rede municipal ficou abaixo do alvo pactuado, e a pipeline identifica exatamente quais municípios.
+
+A tabela `fato_aluno` classifica cada estudante por `faixa_proximidade` em relação aos 743 pontos. A faixa `proximo_abaixo` reúne os alunos a menos de 50 pontos do corte: é o grupo com maior retorno marginal de intervenção pedagógica, e o que a média da taxa esconde. **Restrição conhecida:** a distribuição por nível de proficiência só existe para 2024.
 
 ### Casos de uso em IA
 
@@ -350,7 +459,7 @@ A camada Gold não é o fim da pipeline — é o insumo da próxima etapa. Foi d
 
 ---
 
-## 12. Como executar
+## 16. Como executar
 
 ### Pré-requisitos
 
@@ -420,25 +529,47 @@ python src/teste_bigquery.py
 
 ### Execução
 
-**Estado atual** ✅ — extração e escrita da Bronze:
+**Bronze** — extrai do BigQuery, grava Parquet e envia ao S3:
 
 ```bash
 python src/main.py
 ```
 
-Extrai as tabelas do BigQuery, grava arquivos Parquet na camada Bronze local e realiza automaticamente o upload para o bucket Amazon S3. O comando deve ser executado a partir da raiz do repositório.
-
-**Alvos planejados** ⏳ — via Makefile:
+**Infraestrutura** — cria os 19 recursos AWS:
 
 ```bash
-make bronze      # extrai a fonte e grava na Bronze
-make s3          # sincroniza a Bronze com o bucket
-make silver      # trata, padroniza e integra
-make gold        # gera os datasets analíticos
-make quality     # roda as validações e emite o relatório
-make streaming   # inicia o produtor de eventos
-make test        # executa a suíte de testes
-make pipeline    # executa tudo em sequência
+cd infra/terraform
+terraform init
+terraform apply
+cd ../..
+```
+
+**Silver** — crawler, transformação e qualidade, encadeados na AWS:
+
+```bash
+bash infra/executar_workflow.sh
+```
+
+Etapas isoladas, para depurar sem rodar o fluxo inteiro:
+
+```bash
+bash infra/executar_crawler.sh
+bash infra/executar_job_silver.sh
+```
+
+**Consultas analíticas** sobre a Silver, no Athena:
+
+```bash
+bash scripts/consultar.sh                        # lista as disponíveis
+bash scripts/consultar.sh distribuicao_por_faixa # executa uma
+```
+
+As consultas ficam versionadas em `sql/silver/`, com comentários explicando as restrições que a camada impõe. Quem clonar o repositório e tiver acesso ao Catalog reproduz os mesmos números.
+
+**Notebooks** exigem as dependências de desenvolvimento:
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ### Execução via Makefile
@@ -451,35 +582,31 @@ make test-bq
 make clean
 ```
 
-📄 *Aprofundamento:* [referência dos módulos](docs/api/) ⏳
-
 ---
 
-## 13. Evidências de execução
+## 17. Evidências de execução
 
-> ⏳ *Seção a preencher — comprova que a pipeline efetivamente rodou.*
-
-| Evidência | Link |
+| Evidência | Local |
 |---|---|
+| Notebook de EDA com saídas executadas | [`notebooks/eda_bronze.ipynb`](notebooks/eda_bronze.ipynb) |
+| Print — `terraform apply`, 19 recursos criados | `assets/imagens/` ⏳ |
+| Print — grafo do Workflow, três etapas concluídas | `assets/imagens/` ⏳ |
+| Print — relatório de qualidade, 8 de 8 aprovadas | `assets/imagens/` ⏳ |
+| Print — estrutura das camadas no bucket S3 | `assets/imagens/` ⏳ |
+| Print — log da execução do Workflow | `assets/imagens/` ⏳ |
+| Print — consulta no Athena sobre a Silver | `assets/imagens/` ⏳ |
 | Vídeo — pipeline executando ponta a ponta | ⏳ |
 | Vídeo executivo (até 5 min) | ⏳ |
-| Print — estrutura medalhão no bucket S3 | `assets/imagens/` ⏳ |
-| Print — log completo de execução | `assets/imagens/` ⏳ |
-| Print — relatório de qualidade | `assets/imagens/` ⏳ |
-| Print — dashboard analítico | `assets/imagens/` ⏳ |
-| Print — consulta Athena sobre a Gold | `assets/imagens/` ⏳ |
-| Relatório de execução com métricas | `docs/monitoramento/` ⏳ |
 
 ---
 
-## 14. Estrutura do repositório
+## 18. Estrutura do repositório
 
 ```
 .
 ├── assets/          # diagramas, imagens e evidências visuais
 ├── config/          # configurações de cloud, logging e pipeline
 ├── data/            # área local das camadas (dados NÃO versionados)
-├── docs/            # documentação aprofundada — ver docs/README.md
 ├── infra/           # infraestrutura como código
 ├── logs/            # logs de execução (não versionados)
 ├── monitoring/      # alertas, dashboards e métricas
@@ -502,7 +629,7 @@ make clean
 
 ---
 
-## 15. Fluxo de trabalho Git
+## 19. Fluxo de trabalho Git
 
 O histórico do repositório é parte da entrega. Nada é commitado direto na `main`.
 
@@ -516,9 +643,9 @@ O histórico do repositório é parte da entrega. Nada é commitado direto na `m
 | 4 | `feature/extracao-bigquery` | Extração de dados do BigQuery | `feat` | 🚧 |
 | 5 | `feature/camada-bronze` | Implementação da camada Bronze | `feat` | 🚧 |
 | 6 | `feature/upload-s3` | Upload da Bronze para o Amazon S3 | `feat` | ✅ |
-| 7 | `feature/camada-silver` | Implementação da camada Silver | `feat` | ⏳ |
+| 7 | `feature/camada-silver` | Implementação da camada Silver | `feat` | ✅ |
 | 8 | `feature/camada-gold` | Implementação da camada Gold | `feat` | ⏳ |
-| 9 | `feature/qualidade-dados` | Validações de qualidade | `feat` | ⏳ |
+| 9 | `feature/qualidade-dados` | Validações de qualidade | `feat` | ✅ |
 | 10 | `feature/logging-monitoramento` | Logging e monitoramento | `feat` | ⏳ |
 | 11 | `feature/streaming` | Ingestão em streaming | `feat` | ⏳ |
 | 12 | `feature/finops` | Monitoramento de custos | `feat` | ⏳ |
@@ -553,23 +680,26 @@ Toda branch entra na `main` por PR, usando o template em [`.github/PULL_REQUEST_
 
 ---
 
-## 16. Roadmap e status
+## 20. Roadmap e status
 
 | Etapa | Entregável | Status |
 |---|---|---|
 | Fundação | Estrutura do repositório e fluxo Git | ✅ |
 | Fundação | Configuração de ambiente e aplicação | ✅ |
 | Fundação | Exploração das fontes | ✅ |
-| Fundação | ADRs e diagrama de arquitetura | 🚧 |
-| Bronze | Extração via BigQuery | 🚧 |
+| Fundação | ADRs e diagrama de arquitetura | ✅ |
+| Bronze | Extração via BigQuery | ✅ |
 | Bronze | Escrita em Parquet | ✅ |
 | Bronze | Upload para o S3 | ✅ |
 | Bronze | Produtor de eventos (streaming) | ⏳ |
-| Silver | Transformações e padronização | ⏳ |
-| Silver | Integração das entidades | ⏳ |
-| Silver | Validações de qualidade | ⏳ |
+| Silver | Análise exploratória (CRISP-DM) | ✅ |
+| Silver | Infraestrutura em Terraform | ✅ |
+| Silver | Glue Job de transformação | ✅ |
+| Silver | Schema explícito no Catalog | ✅ |
+| Silver | Validações Q1–Q8 | ✅ |
+| Silver | Orquestração por Glue Workflow | ✅ |
 | Gold | Datasets analíticos | ⏳ |
-| Operação | Logging e monitoramento | ⏳ |
+| Operação | Logging e monitoramento | ✅ |
 | Operação | FinOps e estimativa de custo | ⏳ |
 | Consumo | Dashboard analítico | ⏳ |
 | Entrega | README e documentação | 🚧 |
@@ -578,22 +708,7 @@ Toda branch entra na `main` por PR, usando o template em [`.github/PULL_REQUEST_
 
 ---
 
-## 17. Documentação complementar
-
-Este README é autossuficiente: quem ler só ele entende o problema, a arquitetura, as decisões e como executar. Os documentos abaixo aprofundam cada área para quem quiser o detalhe técnico.
-
-| Área | Conteúdo | Local |
-|---|---|---|
-| **Índice geral** | Mapa de toda a documentação | [`docs/README.md`](docs/README.md) |
-| **Arquitetura** | ADRs, diagramas e modelo dimensional | [`docs/arquitetura/`](docs/arquitetura/) |
-| **Qualidade** | Catálogo de regras, dicionário de dados, relatórios | [`docs/qualidade/`](docs/qualidade/) |
-| **Monitoramento** | Runbook, alertas e métricas | [`docs/monitoramento/`](docs/monitoramento/) |
-| **FinOps** | Memória de cálculo e cenários de custo | [`docs/finops/`](docs/finops/) |
-| **API** | Referência dos módulos de `src/` | [`docs/api/`](docs/api/) |
-
----
-
-## 18. Equipe
+## 21. Equipe
 
 | Nome        | Responsabilidade principal | GitHub |
 |-------------|----------------------------|--------|
@@ -607,7 +722,7 @@ Este README é autossuficiente: quem ler só ele entende o problema, a arquitetu
 
 ---
 
-## 19. Licença
+## 22. Licença
 
 Distribuído sob a licença MIT. Veja [LICENSE](LICENSE).
 

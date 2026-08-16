@@ -231,4 +231,15 @@ logs/*.log
 # Dados gerados pelo pipeline
 data/**/*.parquet
 data/**/*.csv
+
+# Estado do Terraform: contem informacoes do ambiente e nao deve ser versionado
+*.tfstate
+*.tfstate.*
+.terraform/
  
+# Valores especificos de cada pessoa
+terraform.tfvars
+ 
+# Relatorios de qualidade sao gerados a cada execucao
+quality/reports/*
+!quality/reports/.gitkeep
