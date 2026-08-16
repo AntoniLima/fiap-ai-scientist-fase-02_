@@ -231,3 +231,4 @@ logs/*.log
 # Dados gerados pelo pipeline
 data/**/*.parquet
 data/**/*.csv
+ 
