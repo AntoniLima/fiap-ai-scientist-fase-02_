@@ -8,7 +8,7 @@ client = bigquery.Client(
 sql = """
 SELECT *
 FROM `basedosdados.br_inep_avaliacao_alfabetizacao.uf`
-LIMIT 10
+LIMIT 1000
 """
 
 df = client.query(sql).to_dataframe()

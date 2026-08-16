@@ -1,0 +1,2 @@
+# Dependencias de desenvolvimento — nao fazem parte da pipeline
+ipykernel>=6.29
